@@ -6,8 +6,8 @@ import { isAuthorEnvironment, moveInstrumentation } from '../../scripts/scripts.
  * @param {Element} block
  */
 export default async function decorate(block) {
-  const aemauthorurl = 'https://author-p46907-e1619770.adobeaemcloud.com' || '';
-  const aempublishurl = 'https://publish-p46907-e1619770.adobeaemcloud.com' || '';
+  const aemauthorurl = 'https://author-p46821-e1619598.adobeaemcloud.com' || '';
+  const aempublishurl = 'https://publish-p46821-e1619598.adobeaemcloud.com' || '';
   const persistedquery = '/graphql/execute.json/aem-demo-assets/offerByPath';
   const contentPath = block.querySelector(':scope div:nth-child(1) > div a')?.textContent?.trim();
   const variationname =
