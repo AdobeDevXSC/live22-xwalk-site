@@ -5,11 +5,62 @@ import {
   decorateIcons,
   decorateSections,
   loadBlock,
-  loadBlocks,
-} from './lib-franklin.js';
+  loadSections,
+} from './aem.js';
 import { decorateRichtext } from './editor-support-rte.js';
 import { decorateMain } from './scripts.js';
 import { updateButtons } from '../blocks/carousel/carousel.js';
+
+/**
+ *
+ * @param {HTMLElement} block
+ * Use this function to trigger a mutation for the UI editor overlay when you
+ * have a scrollable block
+ */
+function createMutation(block) {
+  block.setAttribute('xwalk-scroll-mutation', 'true');
+  block.querySelector('.carousel-slides').onscrollend = () => {
+    block.removeAttribute('xwalk-scroll-mutation');
+  };
+}
+
+function getState(block) {
+  if (block.matches('.accordion')) {
+    return [...block.querySelectorAll('details[open]')]
+      .map((details) => details.dataset.aueResource);
+  }
+  if (block.matches('.carousel')) {
+    return block.dataset.activeSlide;
+  }
+  return null;
+}
+
+function setState(block, state) {
+  if (block.matches('.accordion')) {
+    block.querySelectorAll('details').forEach((details) => {
+      details.open = state.includes(details.dataset.aueResource);
+    });
+  }
+  if (block.matches('.carousel')) {
+    block.style.display = null;
+    createMutation(block);
+    showSlide(block, state);
+  }
+}
+
+// set the filter for an UE editable
+function setUEFilter(element, filter) {
+  element.dataset.aueFilter = filter;
+}
+
+function updateUEInstrumentation() {
+  const main = document.querySelector('main');
+  const template = document.head.querySelector("[name=template]").getAttribute("content");
+  if (template === "marketing") {
+    // use marketing specific section
+    setUEFilter(main, 'main-marketing');
+  }
+}
 
 async function applyChanges(event) {
   // redecorate default content and blocks on patches (in the properties rail)
@@ -34,16 +85,19 @@ async function applyChanges(event) {
       element.insertAdjacentElement('afterend', newMain);
       decorateMain(newMain);
       decorateRichtext(newMain);
-      await loadBlocks(newMain);
+      await loadSections(newMain);
       element.remove();
       newMain.style.display = null;
       // eslint-disable-next-line no-use-before-define
       attachEventListners(newMain);
       return true;
     }
-
+    if (element.matches('.fragment-wrapper')) {
+      return false;
+    }
     const block = element.parentElement?.closest('.block[data-aue-resource]') || element?.closest('.block[data-aue-resource]');
     if (block) {
+      const state = getState(block);
       const blockResource = block.getAttribute('data-aue-resource');
       const newBlock = parsedUpdate.querySelector(`[data-aue-resource="${blockResource}"]`);
       if (newBlock) {
@@ -55,6 +109,7 @@ async function applyChanges(event) {
         decorateRichtext(newBlock);
         await loadBlock(newBlock);
         block.remove();
+        setState(newBlock, state);
         newBlock.style.display = null;
         return true;
       }
@@ -72,7 +127,7 @@ async function applyChanges(event) {
           decorateRichtext(newSection);
           decorateSections(parentElement);
           decorateBlocks(parentElement);
-          await loadBlocks(parentElement);
+          await loadSections(parentElement);
           element.remove();
           newSection.style.display = null;
         } else {
@@ -89,23 +144,34 @@ async function applyChanges(event) {
   return false;
 }
 
-function updateUi(event) {
-  const { detail, target } = event;
-  if (!detail.selected) return;
+function handleSelection(event) {
+  const { detail } = event;
+  const resource = detail?.resource;
 
-  function handleSelectTabItem(tabItem) {
-    const index = tabItem.getAttribute('data-tab-index');
-    const button = tabItem.closest('.tabs-container').querySelector(`button[data-tab-index="${index}"]`);
-    button.click();
-  }
-  
-  function handleSelectSlide(slide) {
-    slide.parentElement.scrollTo({ top: 0, left: slide.offsetLeft - slide.parentNode.offsetLeft, behavior: 'instant' });
-    updateButtons(slide);
-  }
+  if (resource) {
+    const element = document.querySelector(`[data-aue-resource="${resource}"]`);
+    const block = element.parentElement?.closest('.block[data-aue-resource]') || element?.closest('.block[data-aue-resource]');
 
-  if (target.closest('.tab-item')) handleSelectTabItem(target.closest('.tab-item'));
-  if (target.closest('.slide')) handleSelectSlide(target.closest('.slide'));
+    if (block && block.matches('.accordion')) {
+      // close all details
+      block.querySelectorAll('details').forEach((details) => {
+        details.open = false;
+      });
+      const details = element.matches('details') ? element : element.querySelector('details');
+      details.open = true;
+    }
+
+    if (block && block.matches('.carousel')) {
+      createMutation(block);
+    }
+    if (block && block.matches('.tabs')) {
+      const tabs = [...block.querySelectorAll('.tabs-panel > div')];
+      const index = tabs.findIndex((tab) => tab.dataset.aueResource === resource);
+      if (index !== -1) {
+        block.querySelectorAll('.tabs-list button')[index]?.click();
+      }
+    }
+  }
 }
 
 function attachEventListners(main) {
@@ -118,10 +184,45 @@ function attachEventListners(main) {
   ].forEach((eventType) => main?.addEventListener(eventType, async (event) => {
     event.stopPropagation();
     const applied = await applyChanges(event);
-    if (!applied) window.location.reload();
+    if (applied) {
+      //updateUEInstrumentation();
+    } else {
+      window.location.reload();
+    }
   }));
 
-  main.addEventListener('aue:ui-select', updateUi);
+  main?.addEventListener('aue:ui-select', handleSelection);
 }
 
 attachEventListners(document.querySelector('main'));
+
+// wait for all caorousels to be loaded before stopping the interval
+/*document.querySelectorAll('.carousel').forEach((carousel) => {
+
+  const observer = new MutationObserver((mutationList, observer) => {
+    for (const mutation of mutationList) {
+      if (mutation.type === "attributes" && mutation.attributeName === "data-block-status" &&
+         mutation.target.getAttribute("data-block-status") === "loaded"){
+          stopInterval(carousel);
+      }
+    }
+  });
+  observer.observe(carousel, { attributes: true, childList: false, subtree: false });
+});*/
+
+
+// when entering edit mode stop scrolling
+document.addEventListener('aue:ui-edit', () => {
+  document.querySelectorAll('.block.carousel').forEach( (carousel) => {
+      stopInterval(carousel);
+  });
+});
+
+// when entering preview mode start scrolling
+document.addEventListener('aue:ui-preview', () => {
+  document.querySelectorAll('.block.carousel').forEach( (carousel) => {
+      startInterval(carousel);
+  });
+});
+
+//updateUEInstrumentation();

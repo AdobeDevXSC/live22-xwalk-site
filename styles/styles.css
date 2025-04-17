@@ -380,3 +380,7 @@ main .section[data-section-status='initialized'] {
 .hlx-preview-overlay .hlx-badge .hlx-popup * {
   font-size: 14px;
 }
+
+.section.content-fragment-container {
+  background: white;
+}

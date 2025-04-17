@@ -1,66 +1,67 @@
-// put your AEM publish address here
-// this fixes having to manually change the AEM host here
-const AEM_HOST = checkDomain()
+import { getMetadata } from '../../scripts/aem.js';
+import { isAuthorEnvironment, moveInstrumentation } from '../../scripts/scripts.js';
 
-function checkDomain(){
-  if (window.location.hostname.includes("hlx.page") || window.location.hostname.includes("localhost")){
-    return "https://publish-p131639-e1282833.adobeaemcloud.com/"    
-  }else{
-    return window.location.origin 
+/**
+ *
+ * @param {Element} block
+ */
+export default async function decorate(block) {
+  const aemauthorurl = 'https://author-p46907-e1619770.adobeaemcloud.com' || '';
+  const aempublishurl = 'https://publish-p46907-e1619770.adobeaemcloud.com' || '';
+  const persistedquery = '/graphql/execute.json/aem-demo-assets/offerByPath';
+  const contentPath = block.querySelector(':scope div:nth-child(1) > div a')?.textContent?.trim();
+  const variationname =
+    block
+      .querySelector(':scope div:nth-child(2) > div')
+      ?.textContent?.trim()
+      ?.toLowerCase()
+      ?.replace(' ', '_') || 'master';
+  block.innerHTML = ``;
+  const isAuthor = isAuthorEnvironment();
+  const url = window?.location?.origin?.includes('author')
+    ? `${aemauthorurl}${persistedquery};path=${contentPath};variation=${variationname};ts=${
+        Math.random() * 1000
+      }`
+    : `${aempublishurl}${persistedquery};path=${contentPath};variation=${variationname};ts=${
+        Math.random() * 1000
+      }`;
+  const options = {
+        credentials: 'include'
+      };
+ 
+  const cfReq = await fetch(url, options)
+    .then((response) => response.json())    
+    .then((contentfragment) => {
+      let offer = '';
+      if (contentfragment.data) {
+        offer = contentfragment.data[Object.keys(contentfragment.data)[0]].item;
+      }
+      return offer;
+    });
+  const itemId = `urn:aemconnection:${contentPath}/jcr:content/data/${variationname}`;
+  block.setAttribute('data-aue-type', 'container');
+  block.innerHTML = `
+  <div class='banner-content block' data-aue-resource=${itemId} data-aue-label="offer content fragment" data-aue-type="reference" data-aue-filter="cf">
+		<div class='banner-detail' style="background-image: linear-gradient(90deg,rgba(0,0,0,0.6), rgba(0,0,0,0.1) 80%) ,url(${
+      aemauthorurl + cfReq.heroImage?._path
+    });">
+          <p data-aue-prop="headline" data-aue-label="headline" data-aue-type="text" class='pretitle'>${
+            cfReq?.headline
+          }</p>
+          <p data-aue-prop="pretitle" data-aue-label="pretitle" data-aue-type="text" class='headline'>${
+            cfReq?.pretitle
+          }</p>
+          <p data-aue-prop="detail" data-aue-label="detail" data-aue-type="richtext" class='detail'>${
+            cfReq?.detail?.plaintext
+          }</p>
+
+      </div>
+      <div class='banner-logo'>
+      </div>
+  </div>
+	`;
+  if (!isAuthor) {
+    moveInstrumentation(block, null);
+    block.querySelectorAll('*').forEach((elem) => moveInstrumentation(elem, null));
   }
 }
-
-export default function decorate(block) {
-
-  const slugDiv = block.querySelector('div:nth-child(1)'); 
-  const slugID = document.createElement('div');
-  slugID.id = 'slug';
-  slugDiv.replaceWith(slugID);
-  slugID.innerHTML = `${slugDiv.innerHTML}`;
-  const slug = slugID.textContent.trim();
-  
-  const quoteDiv = block.querySelector('div:last-of-type');
-  const adventureDiv = document.createElement('div');
-  adventureDiv.id = "adventure-" + slug; 
-  quoteDiv.replaceWith(adventureDiv);
-
-
-fetch(AEM_HOST + '/graphql/execute.json/aem-demo-assets/adventure-by-slug;slug=' + slug)
-.then(response => response.json())
-.then(response => {
-
-const backgroundImage = response.data.adventureList.items[0].primaryImage._path;
-document.getElementById(adventureDiv.id).innerHTML = "<section><img src=" + AEM_HOST + backgroundImage + "></section>";  
-
-const adventureTitle = response.data.adventureList.items[0].title;
-document.getElementById(adventureDiv.id).innerHTML += "<section><h3>"+ adventureTitle + "</h3></section>";
-
-const adventureDesc = response.data.adventureList.items[0].description.plaintext;
-document.getElementById(adventureDiv.id).innerHTML += "<section>" + adventureDesc + "</section>";
-
-const adventureType = response.data.adventureList.items[0].adventureType;
-document.getElementById(adventureDiv.id).innerHTML += "<section>" + "Adventure Type: " + adventureType + "</section>";
-
-const tripLength = response.data.adventureList.items[0].tripLength;
-document.getElementById(adventureDiv.id).innerHTML += "<section>" +"Trip Length: " + tripLength + "</section>";
-
-const tripDifficulty = response.data.adventureList.items[0].difficulty;
-document.getElementById(adventureDiv.id).innerHTML += "<section>" + "Difficulty: " + tripDifficulty + "</section>";
-
-const groupSize = response.data.adventureList.items[0].groupSize;
-document.getElementById(adventureDiv.id).innerHTML += "<section>" + "Group Size: " + groupSize + "</section>";
-
-const tripItinerary= response.data.adventureList.items[0].itinerary.html;
-document.getElementById(adventureDiv.id).innerHTML += "<section>" + "Itinerary: </br>" + tripItinerary + "</section>";
-
-})
-.catch(error => {
-  console.log('Error fetching data:', error);
-});
-
-}
-
-
-
-
-

@@ -34,11 +34,10 @@
         "featured-article",
         "blockquote",
         "article-details",
-        "content-fragment",
+        "content-fragment-offer",
         "demo-block",
         "embed",
-        "workfront-reference",
-        "article-content-fragment"
+        "workfront-reference"
       ]
     },
     {

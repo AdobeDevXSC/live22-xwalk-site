@@ -1,4 +1,4 @@
-import { decorateIcons, getMetadata } from '../../scripts/lib-franklin.js';
+import { decorateIcons, getMetadata } from '../../scripts/aem.js';
 import { getSiteRoot } from '../../scripts/scripts.js';
 /**
  * collapses all open nav sections
@@ -19,12 +19,15 @@ function collapseAllNavSections(sections) {
 export default async function decorate(block) {
   // fetch nav content
   const navMeta = getMetadata('nav');
-  const navPath = navMeta ? new URL(navMeta, window.location).pathname : (window.wknd.demoConfig.demoBase || '/nav');
+  //const navPath = navMeta ? new URL(navMeta, window.location).pathname : (window.wknd.demoConfig.demoBase || '/nav');
+  const navPath = navMeta ? new URL(navMeta).pathname : '/nav';
 
-  let navURL = `${getSiteRoot(5)}${navPath}.plain.html`;
+  let navURL = `${getSiteRoot(5)}/nav.plain.html`;
   let updatedNavUrl = navURL.replace(/about-us\/|faqs\/|magazine\/.+\/|adventures\/.+\//g, "/");
 
-  const resp = await fetch(updatedNavUrl.replace("//", "/"), window.location.pathname.endsWith('/nav') ? { cache: 'reload' } : {});
+  //const resp = await fetch(updatedNavUrl.replace("//", "/"), window.location.pathname.endsWith('/nav') ? { cache: 'reload' } : {});
+  const resp = await fetch(`${navPath}.plain.html`);
+
   if (resp.ok) {
     const html = await resp.text();
 

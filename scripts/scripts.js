@@ -1,7 +1,7 @@
+/* eslint-disable import/no-cycle */
+//import { events } from '@dropins/tools/event-bus.js';
 import {
   sampleRUM,
-  getAllMetadata,
-  getMetadata,
   loadHeader,
   loadFooter,
   decorateButtons,
@@ -9,188 +9,207 @@ import {
   decorateSections,
   decorateBlocks,
   decorateTemplateAndTheme,
-  waitForLCP,
-  loadBlocks,
+  waitForFirstImage,
+  loadSection,
+  loadSections,
   loadCSS,
-  buildBlock,
-  readBlockConfig,
-  toClassName,
-} from './lib-franklin.js';
-import {
-  analyticsTrack404,
-  analyticsTrackConversion,
-  analyticsTrackCWV,
-  analyticsTrackError,
-  initAnalyticsTrackingQueue,
-  setupAnalyticsTrackingWithAlloy,
-} from './analytics/lib-analytics.js';
-
-// Define an execution context
-const pluginContext = {
-  getAllMetadata,
   getMetadata,
-  loadCSS,  
-  sampleRUM, 
-};
+  loadScript,
+  toCamelCase,
+  toClassName
+} from './aem.js';
+//import { getProduct, getSkuFromUrl, trackHistory } from './commerce.js';
+//import initializeDropins from './dropins.js';
 
-const LCP_BLOCKS = []; // add your LCP blocks to the list
-window.hlx.RUM_GENERATION = 'experiment-001'; // add your RUM generation information here
+const LCP_BLOCKS = [
+  'product-list-page',
+  'product-list-page-custom',
+  'product-details',
+  'product-details-plan',
+  'commerce-cart',
+  'commerce-checkout',
+  'commerce-account',
+  'commerce-login',
+]; // add your LCP blocks to the list
 
-
-// Define the custom audiences mapping for experience decisioning
 const AUDIENCES = {
   mobile: () => window.innerWidth < 600,
   desktop: () => window.innerWidth >= 600,
-  'new-visitor': () => !localStorage.getItem('franklin-visitor-returning'),
-  'returning-visitor': () => !!localStorage.getItem('franklin-visitor-returning'),
+  // define your custom audiences here as needed
 };
 
-window.hlx.plugins.add('rum-conversion', {
-  url: '/plugins/rum-conversion/src/index.js',
-  load: 'lazy',
-});
-
-window.hlx.plugins.add('experimentation', {
-  condition: () => getMetadata('experiment')
-    || Object.keys(getAllMetadata('campaign')).length
-    || Object.keys(getAllMetadata('audience')).length,
-  options: { audiences: AUDIENCES },
-  load: 'eager',
-  url: '/plugins/experimentation/src/index.js',
-});
+/**
+ * Gets all the metadata elements that are in the given scope.
+ * @param {String} scope The scope/prefix for the metadata
+ * @returns an array of HTMLElement nodes that match the given scope
+ */
+export function getAllMetadata(scope) {
+  return [
+    ...document.head.querySelectorAll(`meta[property^="${scope}:"],meta[name^="${scope}-"]`),
+  ].reduce((res, meta) => {
+    const id = toClassName(
+      meta.name
+        ? meta.name.substring(scope.length + 1)
+        : meta.getAttribute('property').split(':')[1],
+    );
+    res[id] = meta.getAttribute('content');
+    return res;
+  }, {});
+}
 
 export function getSiteRoot(level = 3, path = window.location.pathname) {
   return path.split(/[/.]/, level).join('/');
 }
 
 /**
- * Determine if we are serving content for the block-library, if so don't load the header or footer
- * @returns {boolean} True if we are loading block library content
+ * Returns the current timestamp used for scheduling content.
  */
-export function isBlockLibrary() {
-  return window.location.pathname.includes('block-library');
+export function getTimestamp() {
+  if (
+    (window.location.hostname === 'localhost' || window.location.hostname.endsWith('.hlx.page')) &&
+    window.sessionStorage.getItem('preview-date')
+  ) {
+    return Date.parse(window.sessionStorage.getItem('preview-date'));
+  }
+  return Date.now();
 }
 
 /**
- * Convience method for creating tags in one line of code
- * @param {string} tag Tag to create
- * @param {object} attributes Key/value object of attributes
- * @param {HTMLElement | HTMLElement[] | string} children Child element
- * @returns {HTMLElement} The created tag
+ * Determines whether scheduled content with a given date string should be displayed.
  */
-export function createTag(tag, attributes, children) {
-  const element = document.createElement(tag);
-  if (children) {
-    if (children instanceof HTMLElement
-      || children instanceof SVGElement
-      || children instanceof DocumentFragment) {
-      element.append(children);
-    } else if (Array.isArray(children)) {
-      element.append(...children);
-    } else {
-      element.insertAdjacentHTML('beforeend', children);
-    }
+export function shouldBeDisplayed(date) {
+  const now = getTimestamp();
+
+  const split = date.split('-');
+  if (split.length === 2) {
+    const from = Date.parse(split[0].trim());
+    const to = Date.parse(split[1].trim());
+    return now >= from && now <= to;
   }
-  if (attributes) {
-    Object.entries(attributes).forEach(([key, val]) => {
-      element.setAttribute(key, val);
-    });
+  if (date !== '') {
+    const from = Date.parse(date.trim());
+    return now >= from;
   }
-  return element;
+  return false;
 }
 
-function buildTabs(main) {
-  const tabs = [...main.querySelectorAll(':scope > div')]
-    .map((section) => {
-      // section metadata not yet parsed
-      const sectionMeta = section.querySelector('div.section-metadata');
-      if (sectionMeta) {
-        const meta = readBlockConfig(sectionMeta);
-        return [section, meta.tab];
+/**
+ * Remove scheduled blocks that should not be displayed.
+ */
+function scheduleBlocks(main) {
+  const blocks = main.querySelectorAll('div.section > div > div');
+  blocks.forEach((block) => {
+    let date;
+    const rows = block.querySelectorAll(':scope > div');
+    rows.forEach((row) => {
+      const cols = [...row.children];
+      if (cols.length > 1) {
+        if (cols[0].textContent.toLowerCase() === 'date') {
+          date = cols[1].textContent;
+          row.remove();
+        }
       }
-      return null;
-    })
-    .filter((el) => !!el);
-  if (tabs.length) {
-    const section = document.createElement('div');
-    section.className = 'section';
-    const ul = document.createElement('ul');
-    ul.append(...tabs
-      .map(([,tab]) => {
-        const li = document.createElement('li');
-        li.innerText = tab;
-        return li;
-      }));
-    const tabsBlock = buildBlock('tabs', [[ul]]);
-    section.append(tabsBlock);
-    tabs[0][0].insertAdjacentElement('beforebegin', section);
+    });
+    if (date && !shouldBeDisplayed(date)) {
+      block.remove();
+    }
+  });
+}
+
+/**
+ * Remove scheduled sections that should not be displayed.
+ */
+function scheduleSections(main) {
+  const sections = main.querySelectorAll('div.section');
+  sections.forEach((section) => {
+    const { date } = section.dataset;
+    if (date && !shouldBeDisplayed(date)) {
+      section.remove();
+    }
+  });
+}
+
+// Define an execution context
+const pluginContext = {
+  getAllMetadata,
+  getMetadata,
+  loadCSS,
+  loadScript,
+  sampleRUM,
+  toCamelCase,
+  toClassName,
+};
+
+/**
+ * Moves all the attributes from a given elmenet to another given element.
+ * @param {Element} from the element to copy attributes from
+ * @param {Element} to the element to copy attributes to
+ */
+export function moveAttributes(from, to, attributes) {
+  if (!attributes) {
+    // eslint-disable-next-line no-param-reassign
+    attributes = [...from.attributes].map(({ nodeName }) => nodeName);
   }
+  attributes.forEach((attr) => {
+    const value = from.getAttribute(attr);
+    if (value) {
+      to?.setAttribute(attr, value);
+      from?.removeAttribute(attr);
+    }
+  });
+}
+
+/**
+ * Move instrumentation attributes from a given element to another given element.
+ * @param {Element} from the element to copy attributes from
+ * @param {Element} to the element to copy attributes to
+ */
+export function moveInstrumentation(from, to) {
+  moveAttributes(
+    from,
+    to,
+    [...from.attributes]
+      .map(({ nodeName }) => nodeName)
+      .filter((attr) => attr.startsWith('data-aue-') || attr.startsWith('data-richtext-')),
+  );
+}
+
+/**
+ * load fonts.css and set a session storage flag
+ */
+async function loadFonts() {
+  await loadCSS(`${window.hlx.codeBasePath}/styles/fonts.css`);
+  try {
+    if (!window.location.hostname.includes('localhost'))
+      sessionStorage.setItem('fonts-loaded', 'true');
+  } catch (e) {
+    // do nothing
+  }
+}
+
+function autolinkModals(element) {
+  element.addEventListener('click', async (e) => {
+    const origin = e.target.closest('a');
+
+    if (origin && origin.href && origin.href.includes('/modals/')) {
+      e.preventDefault();
+      const { openModal } = await import(`${window.hlx.codeBasePath}/blocks/modal/modal.js`);
+      openModal(origin.href);
+    }
+  });
 }
 
 /**
  * Builds all synthetic blocks in a container element.
  * @param {Element} main The container element
  */
-function buildAutoBlocks(main) {
+function buildAutoBlocks() {
   try {
-    buildTabs(main);
+    // TODO: add auto block, if needed
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Auto Blocking failed', error);
   }
-}
-
-function patchDemoBlocks(config) {
-  if (window.wknd.demoConfig.blocks && window.wknd.demoConfig.blocks[config.blockName]) {
-    const url = window.wknd.demoConfig.blocks[config.blockName];
-    const splits = new URL(url).pathname.split('/');
-    const [, owner, repo, , branch] = splits;
-    const path = splits.slice(5).join('/');
-
-    const franklinPath = `https://little-forest-58aa.david8603.workers.dev/?url=https://${branch}--${repo}--${owner}.hlx.live/${path}`;
-    return {
-      ...config,
-      jsPath: `${franklinPath}/${config.blockName}.js`,
-      cssPath: `${franklinPath}/${config.blockName}.css`,
-    };
-  }
-  return (config);
-}
-
-async function loadDemoConfig() {
-  const demoConfig = {};
-  const pathSegments = window.location.pathname.split('/');
-  if (window.location.pathname.startsWith('/drafts/') && pathSegments.length > 4) {
-    const demoBase = pathSegments.slice(0, 4).join('/');
-    const resp = await fetch(`${demoBase}/theme.json?sheet=default&sheet=blocks&`);
-    if (resp.status === 200) {
-      const json = await resp.json();
-      const tokens = json.data || json.default.data;
-      const root = document.querySelector(':root');
-      tokens.forEach((e) => {
-        root.style.setProperty(`--${e.token}`, `${e.value}`);
-        demoConfig[e.token] = e.value;
-      });
-      demoConfig.tokens = tokens;
-      demoConfig.demoBase = demoBase;
-      const blocks = json.blocks ? json.blocks.data : [];
-      demoConfig.blocks = {};
-      blocks.forEach((block) => {
-        demoConfig.blocks[block.name] = block.url;
-      });
-
-      window.hlx.patchBlockConfig.push(patchDemoBlocks);
-    }
-
-    if (!demoConfig.demoBase) {
-      const navCheck = await fetch(`${demoBase}/nav.plain.html`);
-      if (navCheck.status === 200) {
-        demoConfig.demoBase = demoBase;
-      }
-    }
-  }
-  window.wknd = window.wknd || {};
-  window.wknd.demoConfig = demoConfig;
 }
 
 /**
@@ -207,171 +226,360 @@ export function decorateMain(main) {
   decorateBlocks(main);
 }
 
+function preloadFile(href, as) {
+  const link = document.createElement('link');
+  link.rel = 'preload';
+  link.as = as;
+  link.crossOrigin = 'anonymous';
+  link.href = href;
+  document.head.appendChild(link);
+}
+
+function addOverlayRule(ruleSet, selector, property, value) {
+  if (!ruleSet.has(selector)) {
+    ruleSet.set(selector,[`--${property}: ${value};`])
+  } else {
+    ruleSet.get(selector).push(`--${property}: ${value};`);
+  }
+}
+
+async function loadThemeSpreadSheetConfig() {
+  const theme = getMetadata('design');
+  if (!theme) return;
+  const resp = await fetch(`/designs/${theme}.json?offset=0&limit=500`);
+  
+  if (resp.status === 200) {
+    // create style element that should be last in the head
+    document.head.insertAdjacentHTML('beforeend', `<style id="style-overrides"></style>`);
+    const sheet = window.document.styleSheets[document.styleSheets.length - 1];
+    // load spreadsheet
+    const json = await resp.json();
+    const tokens = json.data || json.default.data;
+    const root = document.querySelector(':root');
+    // go through the entries and create the rule set 
+    let ruleSet = new Map();
+    tokens.forEach((e) => {
+      const { Property, Value, Section, Block } = e;
+      let selector = '';
+      if (Section.length === 0 && Block.length === 0) {
+        // :root { --<property>: <value>; }
+        addOverlayRule(ruleSet, ':root', Property, Value);
+      } else {
+        // define the section selector if set
+        if (Section.length > 0) {
+          selector = `main .section.${Section}`;
+        } else {
+          selector = `main .section`;
+        }
+        // define the block selector if set
+        if (Block.length) {
+          Block.split(',').forEach((entry) => {
+            entry = entry.trim();
+            let blockSelector = selector;
+            // special cases: default wrapper, text, image, button, title
+            switch (entry) {
+              case "default":
+                  blockSelector += ` .default-content-wrapper`;
+                  break;
+              case "image":
+                  blockSelector += ` .default-content-wrapper img, ${selector} .block.columns img`;
+                  break;
+              case "text":
+                  blockSelector += ` .default-content-wrapper p:not(:has(:is(a.button , picture))), ${selector} .columns.block p:not(:has(:is(a.button , picture)))`;
+                  break;
+              case "button":
+                  blockSelector += ` .default-content-wrapper a.button`;
+                  break;
+              case "title":
+                  blockSelector += ` .default-content-wrapper :is(h1,h2,h3,h4,h5,h6), ${selector} .columns.block :is(h1,h2,h3,h4,h5,h6)`;
+                break;
+              default: 
+                blockSelector += ` .block.${entry}`;  
+            }
+            // main .section.<section-name> .block.<block-name> { --<property>: <value>; }
+            // or any of the spacial cases above
+            addOverlayRule(ruleSet, blockSelector, Property, Value);
+          });
+        } else  {
+          // main .section.<section-name> { --<property>: <value>; }
+          addOverlayRule(ruleSet, selector, Property, Value);
+        }
+      }
+    });
+    // finally write the rule sets to the style element
+    console.log(ruleSet);
+    ruleSet.forEach((rules, selector) => {
+      sheet.insertRule(`${selector} {${rules.join(';')}}`, sheet.cssRules.length);
+    });
+  }
+}
+
 /**
- * loads everything needed to get to LCP.
+ * Loads everything needed to get to LCP.
+ * @param {Element} doc The container element
  */
 async function loadEager(doc) {
   document.documentElement.lang = 'en';
+  //await initializeDropins();
+  await loadThemeSpreadSheetConfig();
   decorateTemplateAndTheme();
 
-  await window.hlx.plugins.run('loadEager');
+  // Instrument experimentation plugin
+  if (
+    getMetadata('experiment') ||
+    Object.keys(getAllMetadata('campaign')).length ||
+    Object.keys(getAllMetadata('audience')).length
+  ) {
+    // eslint-disable-next-line import/no-relative-packages
+    const { loadEager: runEager } = await import('../plugins/experimentation/src/index.js');
+    await runEager(document, { audiences: AUDIENCES }, pluginContext);
 
-  // load demo config
-  await loadDemoConfig();
+    sampleRUM.enhance();
+  }
 
+  window.adobeDataLayer = window.adobeDataLayer || [];
 
+  let pageType = 'CMS';
+  if (document.body.querySelector('main .product-details')) {
+    pageType = 'Product';
+    const sku = getSkuFromUrl();
+    window.getProductPromise = getProduct(sku);
+
+    preloadFile('/scripts/__dropins__/storefront-pdp/containers/ProductDetails.js', 'script');
+    preloadFile('/scripts/__dropins__/storefront-pdp/api.js', 'script');
+    preloadFile('/scripts/__dropins__/storefront-pdp/render.js', 'script');
+    preloadFile('/scripts/__dropins__/storefront-pdp/chunks/initialize.js', 'script');
+    preloadFile('/scripts/__dropins__/storefront-pdp/chunks/getRefinedProduct.js', 'script');
+  } else if (document.body.querySelector('main .product-details-custom')) {
+    pageType = 'Product';
+    preloadFile('/scripts/preact.js', 'script');
+    preloadFile('/scripts/htm.js', 'script');
+    preloadFile('/blocks/product-details-custom/ProductDetailsCarousel.js', 'script');
+    preloadFile('/blocks/product-details-custom/ProductDetailsSidebar.js', 'script');
+    preloadFile('/blocks/product-details-custom/ProductDetailsShimmer.js', 'script');
+    preloadFile('/blocks/product-details-custom/Icon.js', 'script');
+
+    const blockConfig = readBlockConfig(
+      document.body.querySelector('main .product-details-custom'),
+    );
+    const sku = getSkuFromUrl() || blockConfig.sku;
+    window.getProductPromise = getProduct(sku);
+  } else if (document.body.querySelector('main .product-list-page')) {
+    pageType = 'Category';
+    preloadFile('/scripts/widgets/search.js', 'script');
+  } else if (document.body.querySelector('main .product-list-page-custom')) {
+    // TODO Remove this bracket if not using custom PLP
+    pageType = 'Category';
+    const plpBlock = document.body.querySelector('main .product-list-page-custom');
+    const { category, urlpath } = readBlockConfig(plpBlock);
+
+    if (category && urlpath) {
+      // eslint-disable-next-line import/no-unresolved, import/no-absolute-path
+      const { preloadCategory } = await import(
+        '/blocks/product-list-page-custom/product-list-page-custom.js'
+      );
+      preloadCategory({ id: category, urlPath: urlpath });
+    }
+  } else if (document.body.querySelector('main .commerce-cart')) {
+    pageType = 'Cart';
+  } else if (document.body.querySelector('main .commerce-checkout')) {
+    pageType = 'Checkout';
+  }
+
+  window.adobeDataLayer.push({
+    pageContext: {
+      pageType,
+      pageName: document.title,
+      eventType: 'visibilityHidden',
+      maxXOffset: 0,
+      maxYOffset: 0,
+      minXOffset: 0,
+      minYOffset: 0,
+    },
+  });
+  if (pageType !== 'Product') {
+    window.adobeDataLayer.push((dl) => {
+      dl.push({ event: 'page-view', eventInfo: { ...dl.getState() } });
+    });
+  }
 
   const main = doc.querySelector('main');
   if (main) {
-    await initAnalyticsTrackingQueue();
     decorateMain(main);
-    await waitForLCP(LCP_BLOCKS);
+    document.body.classList.add('appear');
+    await loadSection(main.querySelector('.section'), waitForFirstImage);
+  }
+
+  //events.emit('eds/lcp', true);
+
+  try {
+    /* if desktop (proxy for fast connection) or fonts already loaded, load fonts.css */
+    if (window.innerWidth >= 900 || sessionStorage.getItem('fonts-loaded')) {
+      loadFonts();
+    }
+  } catch (e) {
+    // do nothing
   }
 }
 
 /**
- * Adds the favicon.
- * @param {string} href The favicon URL
- */
-export function addFavIcon(href) {
-  const link = document.createElement('link');
-  link.rel = 'icon';
-  link.type = 'image/png';
-  link.href = href;
-  const existingLink = document.querySelector('head link[rel="icon"]');
-  if (existingLink) {
-    existingLink.parentElement.replaceChild(link, existingLink);
-  } else {
-    document.getElementsByTagName('head')[0].appendChild(link);
-  }
-}
-
-/**
- * loads everything that doesn't need to be delayed.
+ * Loads everything that doesn't need to be delayed.
+ * @param {Element} doc The container element
  */
 async function loadLazy(doc) {
+  autolinkModals(doc);
+
   const main = doc.querySelector('main');
-  await loadBlocks(main);
+  await loadSections(main);
 
   const { hash } = window.location;
-  const element = hash ? main.querySelector(hash) : false;
+  const element = hash ? doc.getElementById(hash.substring(1)) : false;
   if (hash && element) element.scrollIntoView();
 
-  if (!isBlockLibrary()) {
-    loadHeader(doc.querySelector('header'));
-    loadFooter(doc.querySelector('footer'));
+  await Promise.all([
+    loadHeader(doc.querySelector('header')),
+    loadFooter(doc.querySelector('footer')),
+    loadCSS(`${window.hlx.codeBasePath}/styles/lazy-styles.css`),
+    loadFonts(),
+    //import('./acdl/adobe-client-data-layer.min.js'),
+  ]);
+
+  if (sessionStorage.getItem('acdl:debug')) {
+    import('./acdl/validate.js');
   }
 
-  if (window.wknd.demoConfig.fonts) {
-    const fonts = window.wknd.demoConfig.fonts.split('\n');
-    fonts.forEach(async (font) => {
-      const [family, url] = font.split(': ');
-      const ff = new FontFace(family, `url('${url}')`);
-      await ff.load();
-      document.fonts.add(ff);
-    });
-  } else {
-    loadCSS(`${window.hlx.codeBasePath}/styles/lazy-styles.css`);
+  //trackHistory();
+
+  // Implement experimentation preview pill
+  if (
+    getMetadata('experiment') ||
+    Object.keys(getAllMetadata('campaign')).length ||
+    Object.keys(getAllMetadata('audience')).length
+  ) {
+    // eslint-disable-next-line import/no-relative-packages
+    const { loadLazy: runLazy } = await import('../plugins/experimentation/src/index.js');
+    await runLazy(document, { audiences: AUDIENCES }, pluginContext);
   }
-  addFavIcon(`${window.wknd.demoConfig.demoBase || window.hlx.codeBasePath}/favicon.png`);
-  sampleRUM('lazy');
-  sampleRUM.observe(main.querySelectorAll('div[data-block-name]'));
-  sampleRUM.observe(main.querySelectorAll('picture > img'));
 
-  // Mark customer as having viewed the page once
-  localStorage.setItem('franklin-visitor-returning', true);
-
-  window.hlx.plugins.run('loadLazy');
+  // Load scheduling sidekick extension
+  //import('./scheduling/scheduling.js');
 }
 
 /**
- * loads everything that happens a lot later, without impacting
- * the user experience.
+ * Loads everything that happens a lot later,
+ * without impacting the user experience.
  */
 function loadDelayed() {
-  // eslint-disable-next-line import/no-cycle
-  window.setTimeout(() => {
-    window.hlx.plugins.load('delayed');
-    window.hlx.plugins.run('loadDelayed');
-    return import('./delayed.js');
-  }, 3000);
+  window.setTimeout(() => import('./delayed.js'), 3000);
   // load anything that can be postponed to the latest here
 }
 
-async function loadPage() {
-  await window.hlx.plugins.load('eager');
-  await loadEager(document);
-  await window.hlx.plugins.load('lazy');
-  await loadLazy(document);
-  //const setupAnalytics = setupAnalyticsTrackingWithAlloy(document);
-  loadDelayed();
-  //await setupAnalytics;
-}
+export async function fetchIndex(indexFile, pageSize = 500) {
+  const handleIndex = async (offset) => {
+    const resp = await fetch(`/${indexFile}.json?limit=${pageSize}&offset=${offset}`);
+    const json = await resp.json();
 
-const cwv = {};
-
-// Forward the RUM CWV cached measurements to edge using WebSDK before the page unloads
-window.addEventListener('beforeunload', () => {
-  if (!Object.keys(cwv).length) return;
-  analyticsTrackCWV(cwv);
-});
-
-// Callback to RUM CWV checkpoint in order to cache the measurements
-sampleRUM.always.on('cwv', async (data) => {
-  if (!data.cwv) return;
-  Object.assign(cwv, data.cwv);
-});
-
-sampleRUM.always.on('404', analyticsTrack404);
-sampleRUM.always.on('error', analyticsTrackError);
-
-// Declare conversionEvent, bufferTimeoutId and tempConversionEvent,
-// outside the convert function to persist them for buffering between
-// subsequent convert calls
-const CONVERSION_EVENT_TIMEOUT_MS = 100;
-let bufferTimeoutId;
-let conversionEvent;
-let tempConversionEvent;
-sampleRUM.always.on('convert', (data) => {
-  const { element } = data;
-  // eslint-disable-next-line no-undef
-  if (!element || !alloy) {
-    return;
-  }
-
-  if (element.tagName === 'FORM') {
-    conversionEvent = {
-      ...data,
-      event: 'Form Complete',
+    const newIndex = {
+      complete: json.limit + json.offset === json.total,
+      offset: json.offset + pageSize,
+      promise: null,
+      data: [...window.index[indexFile].data, ...json.data],
     };
 
-    if (conversionEvent.event === 'Form Complete'
-      // Check for undefined, since target can contain value 0 as well, which is falsy
-      && (data.target === undefined || data.source === undefined)
-    ) {
-      // If a buffer has already been set and tempConversionEvent exists,
-      // merge the two conversionEvent objects to send to alloy
-      if (bufferTimeoutId && tempConversionEvent) {
-        conversionEvent = { ...tempConversionEvent, ...conversionEvent };
-      } else {
-        // Temporarily hold the conversionEvent object until the timeout is complete
-        tempConversionEvent = { ...conversionEvent };
+    return newIndex;
+  };
 
-        // If there is partial form conversion data,
-        // set the timeout buffer to wait for additional data
-        bufferTimeoutId = setTimeout(async () => {
-          analyticsTrackConversion({ ...conversionEvent });
-          tempConversionEvent = undefined;
-          conversionEvent = undefined;
-        }, CONVERSION_EVENT_TIMEOUT_MS);
-      }
-    }
-    return;
+  window.index = window.index || {};
+  window.index[indexFile] = window.index[indexFile] || {
+    data: [],
+    offset: 0,
+    complete: false,
+    promise: null,
+  };
+
+  // Return index if already loaded
+  if (window.index[indexFile].complete) {
+    return window.index[indexFile];
   }
 
-  analyticsTrackConversion({ ...data });
-  tempConversionEvent = undefined;
-  conversionEvent = undefined;
-});
+  // Return promise if index is currently loading
+  if (window.index[indexFile].promise) {
+    return window.index[indexFile].promise;
+  }
+
+  window.index[indexFile].promise = handleIndex(window.index[indexFile].offset);
+  const newIndex = await window.index[indexFile].promise;
+  window.index[indexFile] = newIndex;
+
+  return newIndex;
+}
+
+export function jsx(html, ...args) {
+  return html.slice(1).reduce((str, elem, i) => str + args[i] + elem, html[0]);
+}
+
+export function createAccordion(header, content, expanded = false) {
+  // Create a container for the accordion
+  const container = document.createElement('div');
+  container.classList.add('accordion');
+  const accordionContainer = document.createElement('details');
+  accordionContainer.classList.add('accordion-item');
+
+  // Create the accordion header
+  const accordionHeader = document.createElement('summary');
+  accordionHeader.classList.add('accordion-item-label');
+  accordionHeader.innerHTML = `<div>${header}</div>`;
+
+  // Create the accordion content
+  const accordionContent = document.createElement('div');
+  accordionContent.classList.add('accordion-item-body');
+  accordionContent.innerHTML = content;
+
+  accordionContainer.append(accordionHeader, accordionContent);
+  container.append(accordionContainer);
+
+  if (expanded) {
+    accordionContent.classList.toggle('active');
+    accordionHeader.classList.add('open-default');
+    accordionContainer.setAttribute('open', true);
+  }
+
+  function updateContent(newContent) {
+    accordionContent.innerHTML = newContent;
+    // accordionContent.innerHTML = '<p>Hello world</p>';
+  }
+
+  return [container, updateContent];
+}
+
+export function generateListHTML(data) {
+  let html = '<ul>';
+  data.forEach((item) => {
+    html += `<li>${item.label}: <span>${item.value}</span></li>`;
+  });
+  html += '</ul>';
+  return html;
+}
+
+export function isAuthorEnvironment() {
+  return document.querySelector('*[data-aue-resource]') !== null;
+}
+
+/**
+ * Check if consent was given for a specific topic.
+ * @param {*} topic Topic identifier
+ * @returns {boolean} True if consent was given
+ */
+// eslint-disable-next-line no-unused-vars
+export function getConsent(topic) {
+  console.warn('getConsent not implemented');
+  return true;
+}
+
+async function loadPage() {
+  await loadEager(document);
+  await loadLazy(document);
+  loadDelayed();
+}
 
 loadPage();

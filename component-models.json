@@ -211,17 +211,32 @@
     ]
   },
   {
-    "id": "content-fragment",
+    "id": "content-fragment-offer",
     "fields": [
       {
-        "component": "text-input",
-        "name": "text",
+        "component": "aem-content-fragment",
+        "name": "path",
         "value": "",
-        "label": "Slug",
+        "label": "Content Fragment path",
         "valueType": "string"
+      },
+      {
+        "component": "select",
+        "name": "variation",
+        "value": "",
+        "label": "Variation",
+        "valueType": "string",
+        "options": [
+          { "name": "Default", "value": "master" },
+          { "name": "Variation 1", "value": "Variation 1" },
+          { "name": "Variation 2", "value": "Variation 2" },
+          { "name": "Variation 3", "value": "Variation 3" },
+          { "name": "Variation 4", "value": "Variation 4" },
+          { "name": "Variation 5", "value": "Variation 5" }
+        ]
       }
     ]
-  },  
+  },
   {
     "id": "article-content-fragment",
     "fields": [
